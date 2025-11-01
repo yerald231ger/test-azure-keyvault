@@ -723,3 +723,4 @@ kubectl exec -n nsp-appointment deployment/keyvault-api -- \
 - [AKS Workload Identity Overview](https://learn.microsoft.com/azure/aks/workload-identity-overview)
 - [Azure SDK for .NET - DefaultAzureCredential](https://learn.microsoft.com/dotnet/api/azure.identity.defaultazurecredential)
 - [Key Vault RBAC Guide](https://learn.microsoft.com/azure/key-vault/general/rbac-guide)
+- [Kubernetes ServiceAccounts](https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/)
