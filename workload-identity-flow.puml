@@ -1,0 +1,100 @@
+@startuml Azure Workload Identity Flow
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam handwritten false
+skinparam sequenceMessageAlign center
+skinparam BoxPadding 10
+
+title Azure Workload Identity - GET / Endpoint Flow
+
+actor User as user
+participant "Load Balancer" as lb #LightBlue
+participant "Pod\n(keyvault-api)" as pod #LightGreen
+participant "Endpoint Handler\nGET /" as handler #Yellow
+participant "IConfiguration" as config #Orange
+participant "Key Vault\nConfiguration Provider" as kvprovider #Pink
+participant "DefaultAzure\nCredential" as credential #Lavender
+box "Kubernetes" #LightCyan
+    participant "Service Account\n(svc-appointment)" as sa
+    participant "OIDC Token\n(Projected Volume)" as token
+end box
+participant "Azure AD\nToken Exchange" as aad #LightSalmon
+participant "Azure AD\nAuthentication" as azuread #LightSalmon
+participant "Key Vault\n(kv-appointment)" as kv #LightPink
+
+== Application Startup (Configuration Loading) ==
+
+pod -> config: Initialize IConfiguration
+config -> kvprovider: Load Key Vault Configuration Provider
+kvprovider -> credential: Create DefaultAzureCredential()
+credential -> credential: Detect environment variables\n(AZURE_FEDERATED_TOKEN_FILE)
+
+kvprovider -> credential: GetTokenAsync(Key Vault scope)
+activate credential
+
+credential -> token: Read OIDC token from\n/var/run/secrets/azure/tokens/\nazure-identity-token
+token --> credential: Return Kubernetes OIDC JWT token\n{\n  "iss": "https://aks-oidc-issuer",\n  "sub": "system:serviceaccount:nsp-appointment:svc-appointment",\n  "aud": ["api://AzureADTokenExchange"]\n}
+
+credential -> aad: POST /oauth2/v2.0/token\nAssertion: <K8s OIDC Token>\nClient ID: <Managed Identity>\nGrant Type: client_credentials
+activate aad
+
+aad -> aad: Validate OIDC token signature
+aad -> aad: Check Federated Credential:\n- Issuer matches?\n- Subject matches?\n- Audience correct?
+
+aad --> credential: Return Azure AD Access Token\n{\n  "access_token": "eyJ0eXAi...",\n  "expires_in": 3600\n}
+deactivate aad
+
+deactivate credential
+
+kvprovider -> kv: GET /secrets/ApiKey\nAuthorization: Bearer <Azure AD Token>
+activate kv
+
+kv -> kv: Validate Azure AD token
+kv -> kv: Check RBAC permissions:\nDoes Managed Identity have\n"Key Vault Secrets User" role?
+
+kv --> kvprovider: Return secret value\n{\n  "value": "MySecretValue-123456",\n  "id": "https://kv-appointment.vault.azure.net/secrets/ApiKey"\n}
+deactivate kv
+
+kvprovider --> config: Store in configuration\nconfig["ApiKey"] = "MySecretValue-123456"
+config --> pod: Configuration ready
+
+note over pod
+  App is now running with
+  secrets loaded from Key Vault
+end note
+
+== HTTP Request Flow ==
+
+user -> lb: HTTP GET /
+lb -> pod: Forward request
+pod -> handler: Route to GET / endpoint
+
+handler -> config: config["ApiKey"]
+config --> handler: Return "MySecretValue-123456"\n(from memory, no new Key Vault call)
+
+handler -> handler: Create response object:\n{\n  "SecretValue": "MySecretValue-123456"\n}
+
+handler --> pod: Results.Ok(response)
+pod --> lb: HTTP 200 OK\n{\n  "SecretValue": "MySecretValue-123456"\n}
+lb --> user: Return JSON response
+
+note over user, kv
+  Subsequent requests use cached configuration.
+  No additional Key Vault calls unless
+  configuration is reloaded.
+end note
+
+== Token Refresh (Background) ==
+
+note over credential, aad
+  Azure SDK automatically refreshes
+  the Azure AD token before expiration
+  (typically every 50 minutes for 1-hour tokens)
+end note
+
+token -> token: Kubernetes auto-rotates\nOIDC token before expiration
+credential -> token: Read updated token
+credential -> aad: Exchange for new Azure AD token
+aad --> credential: New access token
+
+@enduml
