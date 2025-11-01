@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keyvault-api
+  namespace: nsp-appointment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keyvault-api
+  template:
+    metadata:
+      labels:
+        app: keyvault-api
+        azure.workload.identity/use: "true"  # Required for workload identity
+    spec:
+      serviceAccountName: svc-appointment  # Use the service account with workload identity
+      containers:
+      - name: api
+        image: acr88fda2.azurecr.io/test-keyvault-api:v1
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ASPNETCORE_ENVIRONMENT
+          value: "Production"
+        - name: AzureKeyVaultName
+          value: "kv-appointment"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keyvault-api-service
+  namespace: nsp-appointment
+spec:
+  type: LoadBalancer
+  selector:
+    app: keyvault-api
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
